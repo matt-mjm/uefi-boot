@@ -1,3 +1,0 @@
-[submodule "uefi-spec"]
-	path = uefi-spec
-	url = https://github.com/matt-mjm/uefi-spec.git

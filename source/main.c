@@ -11,9 +11,7 @@ static EFI_BOOT_SERVICES *BootServices = NULL;
 
 static EFI_LOADED_IMAGE_PROTOCOL *LoadedImageProtocol = NULL;
 static EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *SimpleFileSystemProtocol = NULL;
-
-static EFI_GUID LoadedImageProtocolGuid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
-static EFI_GUID SimpleFileSystemProtocolGuid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
+static EFI_DEVICE_PATH_PROTOCOL *DevicePathProtocol = NULL;
 
 EFI_STATUS EFI_API efi_init(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     MyImageHandle = ImageHandle;
@@ -24,7 +22,7 @@ EFI_STATUS EFI_API efi_init(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTabl
 
     BootServices->OpenProtocol(
             ImageHandle,
-            &LoadedImageProtocolGuid,
+            &EFI_LOADED_IMAGE_PROTOCOL_GUID,
             (VOID **)&LoadedImageProtocol,
             ImageHandle,
             NULL,
@@ -32,7 +30,15 @@ EFI_STATUS EFI_API efi_init(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTabl
 
     BootServices->OpenProtocol(
             LoadedImageProtocol->DeviceHandle,
-            &SimpleFileSystemProtocolGuid,
+            &EFI_DEVICE_PATH_PROTOCOL_GUID,
+            (VOID **)&DevicePathProtocol,
+            ImageHandle,
+            NULL,
+            EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+
+    BootServices->OpenProtocol(
+            LoadedImageProtocol->DeviceHandle,
+            &EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
             (VOID **)&SimpleFileSystemProtocol,
             ImageHandle,
             NULL,
@@ -43,9 +49,11 @@ EFI_STATUS EFI_API efi_init(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTabl
 
 EFI_STATUS efi_cleanup(void) {
     BootServices->CloseProtocol(
-            LoadedImageProtocol->DeviceHandle, &SimpleFileSystemProtocolGuid, MyImageHandle, NULL);
+            LoadedImageProtocol->DeviceHandle, &EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID, MyImageHandle, NULL);
     BootServices->CloseProtocol(
-            MyImageHandle, &LoadedImageProtocolGuid, MyImageHandle, NULL);
+            LoadedImageProtocol->DeviceHandle, &EFI_DEVICE_PATH_PROTOCOL_GUID, MyImageHandle, NULL);
+    BootServices->CloseProtocol(
+            MyImageHandle, &EFI_LOADED_IMAGE_PROTOCOL_GUID, MyImageHandle, NULL);
 
     return EFI_SUCCESS;
 }
@@ -399,13 +407,14 @@ EFI_STATUS DirectoryNavigationMenu(void) {
 EFI_STATUS EFI_API efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     efi_init(ImageHandle, SystemTable);
 
-    SystemTable->ConsoleOut->EnableCursor(ConsoleOut, TRUE);
+    SystemTable->ConsoleOut->EnableCursor(SystemTable->ConsoleOut, TRUE);
     SystemTable->ConsoleOut->SetAttribute(SystemTable->ConsoleOut,
             EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK));
     SystemTable->ConsoleOut->ClearScreen(SystemTable->ConsoleOut);
 
-    /*DisplayDevicePath(LoadedImageProtocol->FilePath);
-    WaitForKey();*/
+    DisplayDevicePath(DevicePathProtocol);
+    DisplayDevicePath(LoadedImageProtocol->FilePath);
+    WaitForKey();
 
     DirectoryNavigationMenu();
 

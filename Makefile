@@ -1,10 +1,10 @@
 .POSIX:
 .PHONY: all clean
 
-SRC_DIR = source
-INC_DIR = uefi-spec/include
+SOURCE_DIR = source
+SPEC_DIR = ../uefi-spec/include
 
-SOURCES = ${SRC_DIR}/main.c
+SOURCES = ${SOURCE_DIR}/main.c
 TARGET = boot.efi
 
 CC = clang \
@@ -25,7 +25,7 @@ LDFLAGS = \
 all: ${TARGET}
 
 ${TARGET}: ${SOURCES}
-	${CC} ${CFLAGS} ${LDFLAGS} -I ${INC_DIR} -o $@ $<
+	${CC} ${CFLAGS} ${LDFLAGS} -I ${SPEC_DIR} -o $@ $<
 
 clean:
 	rm ${TARGET}

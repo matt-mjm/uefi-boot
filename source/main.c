@@ -13,6 +13,9 @@ static EFI_LOADED_IMAGE_PROTOCOL *LoadedImageProtocol = NULL;
 static EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *SimpleFileSystemProtocol = NULL;
 static EFI_DEVICE_PATH_PROTOCOL *DevicePathProtocol = NULL;
 
+static UINTN ConsoleWidth = 0, ConsoleHeight = 0;
+static char16_t *LINE = NULL;
+
 EFI_STATUS EFI_API efi_init(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     MyImageHandle = ImageHandle;
     ConsoleIn = SystemTable->ConsoleIn;
@@ -44,6 +47,19 @@ EFI_STATUS EFI_API efi_init(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTabl
             NULL,
             EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
 
+    SystemTable->ConsoleOut->EnableCursor(SystemTable->ConsoleOut,
+            TRUE);
+    SystemTable->ConsoleOut->SetAttribute(SystemTable->ConsoleOut,
+            EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK));
+    SystemTable->ConsoleOut->ClearScreen(SystemTable->ConsoleOut);
+
+    SystemTable->ConsoleOut->QueryMode(SystemTable->ConsoleOut,
+            SystemTable->ConsoleOut->Mode->Mode,
+            &ConsoleWidth, &ConsoleHeight);
+    SystemTable->BootServices->AllocatePool(EfiLoaderData,
+            ConsoleWidth + 1, (void **)&LINE);
+    LINE[ConsoleWidth] = u'\0';
+
     return EFI_SUCCESS;
 }
 
@@ -54,6 +70,8 @@ EFI_STATUS efi_cleanup(void) {
             LoadedImageProtocol->DeviceHandle, &EFI_DEVICE_PATH_PROTOCOL_GUID, MyImageHandle, NULL);
     BootServices->CloseProtocol(
             MyImageHandle, &EFI_LOADED_IMAGE_PROTOCOL_GUID, MyImageHandle, NULL);
+
+    BootServices->FreePool(LINE);
 
     return EFI_SUCCESS;
 }
@@ -66,6 +84,54 @@ EFI_INPUT_KEY WaitForKey(void) {
     EFI_INPUT_KEY key = { 0, u'\0' };
     ConsoleIn->ReadKeyStroke(ConsoleIn, &key);
     return key;
+}
+
+void ResetConsole(void) {
+    static const char16_t BOXDRAW_HORIZONTAL = 0x2500;
+    static const char16_t BOXDRAW_VERTICAL = 0x2502;
+    static const char16_t BOXDRAW_DOWN_RIGHT = 0x250c;
+    static const char16_t BOXDRAW_DOWN_LEFT = 0x2510;
+    static const char16_t BOXDRAW_UP_RIGHT = 0x2514;
+    static const char16_t BOXDRAW_UP_LEFT = 0x2518;
+
+    ConsoleOut->SetCursorPosition(ConsoleOut, 0, 0);
+
+    LINE[0] = BOXDRAW_DOWN_RIGHT;
+    LINE[ConsoleWidth - 1] = BOXDRAW_DOWN_LEFT;
+    for (UINTN i = 1; i < ConsoleWidth - 1; i++)
+        LINE[i] = BOXDRAW_HORIZONTAL;
+    ConsoleOut->OutputString(ConsoleOut, LINE);
+
+    LINE[0] = BOXDRAW_VERTICAL;
+    LINE[ConsoleWidth - 1] = BOXDRAW_VERTICAL;
+    for (UINTN i = 1; i < ConsoleWidth - 1; i++)
+        LINE[i] = u' ';
+    for (UINTN i = 3; i < ConsoleHeight; i++)
+        ConsoleOut->OutputString(ConsoleOut, LINE);
+
+    LINE[0] = BOXDRAW_UP_RIGHT;
+    LINE[ConsoleWidth - 1] = BOXDRAW_UP_LEFT;
+    for (UINTN i = 1; i < ConsoleWidth - 1; i++)
+        LINE[i] = BOXDRAW_HORIZONTAL;
+    ConsoleOut->OutputString(ConsoleOut, LINE);
+
+    ConsoleOut->SetCursorPosition(ConsoleOut, 0, 0);
+}
+
+void WriteLine(char16_t *data, BOOLEAN highligh) {
+    static const UINTN COLORS[] = { EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK), EFI_TEXT_ATTRIBUTE(EFI_BLACK, EFI_LIGHTGRAY) };
+    ConsoleOut->SetAttribute(ConsoleOut, COLORS[highligh % 2]);
+
+    ConsoleOut->SetCursorPosition(ConsoleOut, 1, ConsoleOut->Mode->CursorRow + 1);
+
+    size_t index = 0;
+    LINE[index++] = u' ';
+    for (; index < ConsoleWidth - 4 && data[index - 1] != u'\0'; index++)
+        LINE[index] = data[index - 1];
+    for (; index < ConsoleWidth - 2; index++)
+        LINE[index] = u' ';
+    LINE[ConsoleWidth - 2] = u'\0';
+    ConsoleOut->OutputString(ConsoleOut, LINE);
 }
 
 EFI_STATUS memset(void *dst, uint8_t value, size_t size) {
@@ -230,9 +296,9 @@ EFI_STATUS LoadImageFromPath(const char16_t *path) {
     printf(u"Status: %x\r\n", status);
     WaitForKey();
 
-    BootServices->StartImage(NextImageHandle, NULL, NULL);
-
     BootServices->FreePool(Buffer);
+
+    BootServices->StartImage(NextImageHandle, NULL, NULL);
 
     return EFI_SUCCESS;
 }
@@ -240,16 +306,15 @@ EFI_STATUS LoadImageFromPath(const char16_t *path) {
 EFI_STATUS EFI_API efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     efi_init(ImageHandle, SystemTable);
 
-    SystemTable->ConsoleOut->EnableCursor(SystemTable->ConsoleOut, TRUE);
-    SystemTable->ConsoleOut->SetAttribute(SystemTable->ConsoleOut,
-            EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK));
-    SystemTable->ConsoleOut->ClearScreen(SystemTable->ConsoleOut);
-
-    DisplayDevicePath(DevicePathProtocol);
+    /*DisplayDevicePath(DevicePathProtocol);
     DisplayDevicePath(LoadedImageProtocol->FilePath);
     WaitForKey();
-    LoadImageFromPath(u"\\EFI\\BOOT\\BOOTX64.EFI");
+    LoadImageFromPath(u"\\EFI\\BOOT\\BOOTX64.EFI");*/
 
+    ResetConsole();
+    WriteLine(u"Hello, World", TRUE);
+
+    WaitForKey();
     efi_cleanup();
     return EFI_SUCCESS;
 }

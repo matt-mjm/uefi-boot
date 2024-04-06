@@ -303,16 +303,97 @@ EFI_STATUS LoadImageFromPath(const char16_t *path) {
     return EFI_SUCCESS;
 }
 
+
+
+EFI_STATUS ExpandLoadOption(EFI_EXPANDED_LOAD_OPTION *LoadOption) {
+    LoadOption->Description = (char16_t *)((uint8_t *)LoadOption->LoadOption +
+            sizeof(EFI_LOAD_OPTION));
+    LoadOption->DescriptionLength = (strlen(LoadOption->Description) + 1) * sizeof(char16_t);
+
+    LoadOption->FilePathList = (EFI_DEVICE_PATH_PROTOCOL *)((uint8_t *)LoadOption->LoadOption +
+            sizeof(EFI_LOAD_OPTION) + LoadOption->DescriptionLength);
+    LoadOption->FilePathListLength = LoadOption->LoadOption->FilePathListLength;
+
+    LoadOption->OptionalData = (UINT8 *)((uint8_t *)LoadOption->LoadOption +
+            sizeof(EFI_LOAD_OPTION) + LoadOption->DescriptionLength + LoadOption->FilePathListLength);
+    LoadOption->OptionalDataLength = LoadOption->LoadOptionLength - sizeof(EFI_LOAD_OPTION) - LoadOption->DescriptionLength - LoadOption->FilePathListLength;
+
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS LoadGlobalVariable(char16_t *VariableName, UINTN *DataSize, void **Data) {
+    if (VariableName == NULL || DataSize == NULL || Data == NULL)
+        return EFI_INVALID_PARAMETER;
+    *DataSize = 0;
+    *Data = NULL;
+
+    EFI_STATUS status = EFI_SUCCESS;
+    status = RuntimeServices->GetVariable(VariableName, &EFI_GLOBAL_VARIABLE_GUID, NULL, DataSize, NULL);
+    status = BootServices->AllocatePool(EfiLoaderData, *DataSize, Data);
+    if (status != EFI_SUCCESS)
+        return status;
+
+    status = RuntimeServices->GetVariable(VariableName, &EFI_GLOBAL_VARIABLE_GUID, NULL, DataSize, *Data);
+    if (status != EFI_SUCCESS)
+        return status;
+
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS LoadBootNumber(uint16_t BootNumber, EFI_EXPANDED_LOAD_OPTION *LoadOption) {
+    static const char16_t HEX[] = u"0123456789abcdef";
+    static char16_t VariableName[9] = u"Boot";
+    VariableName[4] = HEX[(BootNumber / 4096) % 16];
+    VariableName[5] = HEX[(BootNumber / 256) % 16];
+    VariableName[6] = HEX[(BootNumber / 16) % 16];
+    VariableName[7] = HEX[BootNumber % 16];
+    VariableName[8] = u'\0';
+
+    EFI_STATUS status = LoadGlobalVariable(VariableName, &LoadOption->LoadOptionLength, (void**)&LoadOption->LoadOption);
+    if (status != EFI_SUCCESS)
+        return status;
+
+    ExpandLoadOption(LoadOption);
+
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS LoadBootOptions(UINTN *LoadOptionCount, EFI_EXPANDED_LOAD_OPTION **LoadOptions) {
+    UINTN BootOrderSize = 0;
+    uint16_t *BootOrder = NULL;
+    LoadGlobalVariable(u"BootOrder", &BootOrderSize, (void **)&BootOrder);
+    *LoadOptionCount = BootOrderSize / sizeof(uint16_t);
+
+    BootServices->AllocatePool(EfiLoaderData, *LoadOptionCount * sizeof(EFI_EXPANDED_LOAD_OPTION), (void **)LoadOptions);
+    for (UINTN i = 0; i < *LoadOptionCount; i++) {
+        LoadBootNumber(BootOrder[i], &(*LoadOptions)[i]);
+    }
+
+    BootServices->FreePool(BootOrder);
+
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS FreeBootOptions(UINTN LoadOptionCount, EFI_EXPANDED_LOAD_OPTION *LoadOptions) {
+    for (UINTN i = 0; i < LoadOptionCount; i++)
+        BootServices->FreePool(LoadOptions[i].LoadOption);
+    BootServices->FreePool(LoadOptions);
+
+    return EFI_SUCCESS;
+}
+
 EFI_STATUS EFI_API efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     efi_init(ImageHandle, SystemTable);
 
-    /*DisplayDevicePath(DevicePathProtocol);
-    DisplayDevicePath(LoadedImageProtocol->FilePath);
-    WaitForKey();
-    LoadImageFromPath(u"\\EFI\\BOOT\\BOOTX64.EFI");*/
+    UINTN LoadOptionCount = 0;
+    EFI_EXPANDED_LOAD_OPTION *LoadOptions = NULL;
+    LoadBootOptions(&LoadOptionCount, &LoadOptions);
 
-    ResetConsole();
-    WriteLine(u"Hello, World", TRUE);
+    for (UINTN i = 0; i < LoadOptionCount; i++) {
+        printf(u"%s\r\n", LoadOptions[i].Description);
+    }
+
+    FreeBootOptions(LoadOptionCount, LoadOptions);
 
     WaitForKey();
     efi_cleanup();

@@ -385,17 +385,35 @@ EFI_STATUS FreeBootOptions(UINTN LoadOptionCount, EFI_EXPANDED_LOAD_OPTION *Load
 EFI_STATUS EFI_API efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     efi_init(ImageHandle, SystemTable);
 
-    UINTN LoadOptionCount = 0;
-    EFI_EXPANDED_LOAD_OPTION *LoadOptions = NULL;
-    LoadBootOptions(&LoadOptionCount, &LoadOptions);
+    printf(u"Hello, World.\r\n");
 
-    for (UINTN i = 0; i < LoadOptionCount; i++) {
-        printf(u"%s\r\n", LoadOptions[i].Description);
+    EFI_EVENT Events[2];
+    SystemTable->BootServices->CreateEvent(
+            EFI_EVENT_TIMER,
+            TPL_APPLICATION,
+            NULL, NULL,
+            Events
+    );
+    SystemTable->BootServices->SetTimer(Events[0], TimerPeriodic, 10000000);
+    Events[1] = SystemTable->ConsoleIn->WaitForKey;
+
+    int countdown = 10;
+    while (countdown >= 0) {
+        printf(u"Countdown: %u   \r", countdown--);
+        UINTN index = 0;
+        SystemTable->BootServices->WaitForEvent(2, Events, &index);
+        if (index == 1) {
+            EFI_INPUT_KEY key;
+            SystemTable->ConsoleIn->ReadKeyStroke(SystemTable->ConsoleIn, &key);
+            break;
+        }
     }
 
-    FreeBootOptions(LoadOptionCount, LoadOptions);
+    SystemTable->BootServices->CloseEvent(Events[0]);
 
+    printf(u"Booting...    \r");
     WaitForKey();
+
     efi_cleanup();
     return EFI_SUCCESS;
 }

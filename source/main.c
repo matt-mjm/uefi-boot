@@ -303,8 +303,6 @@ EFI_STATUS LoadImageFromPath(const char16_t *path) {
     return EFI_SUCCESS;
 }
 
-
-
 EFI_STATUS ExpandLoadOption(EFI_EXPANDED_LOAD_OPTION *LoadOption) {
     LoadOption->Description = (char16_t *)((uint8_t *)LoadOption->LoadOption +
             sizeof(EFI_LOAD_OPTION));
@@ -382,38 +380,125 @@ EFI_STATUS FreeBootOptions(UINTN LoadOptionCount, EFI_EXPANDED_LOAD_OPTION *Load
     return EFI_SUCCESS;
 }
 
-EFI_STATUS EFI_API efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
-    efi_init(ImageHandle, SystemTable);
-
-    printf(u"Hello, World.\r\n");
-
+void DisplayCountdown(void) {
     EFI_EVENT Events[2];
-    SystemTable->BootServices->CreateEvent(
+    BootServices->CreateEvent(
             EFI_EVENT_TIMER,
             TPL_APPLICATION,
             NULL, NULL,
             Events
     );
-    SystemTable->BootServices->SetTimer(Events[0], TimerPeriodic, 10000000);
-    Events[1] = SystemTable->ConsoleIn->WaitForKey;
+    BootServices->SetTimer(Events[0], TimerPeriodic, 10000000);
+    Events[1] = ConsoleIn->WaitForKey;
 
     int countdown = 10;
     while (countdown >= 0) {
         printf(u"Countdown: %u   \r", countdown--);
         UINTN index = 0;
-        SystemTable->BootServices->WaitForEvent(2, Events, &index);
+        BootServices->WaitForEvent(2, Events, &index);
         if (index == 1) {
             EFI_INPUT_KEY key;
-            SystemTable->ConsoleIn->ReadKeyStroke(SystemTable->ConsoleIn, &key);
+            ConsoleIn->ReadKeyStroke(ConsoleIn, &key);
             break;
         }
     }
 
-    SystemTable->BootServices->CloseEvent(Events[0]);
+    BootServices->CloseEvent(Events[0]);
 
     printf(u"Booting...    \r");
     WaitForKey();
+}
 
-    efi_cleanup();
+void DisplayBootOptions(UINTN LoadOptionCount, EFI_EXPANDED_LOAD_OPTION *LoadOptions, UINTN Selection) {
+    for (UINTN i = 0; i < LoadOptionCount; i++) {
+        ConsoleOut->SetAttribute(ConsoleOut, EFI_TEXT_ATTRIBUTE(
+            Selection == i ? EFI_BLACK : EFI_LIGHTGRAY,
+            Selection == i ? EFI_LIGHTGRAY : EFI_BLACK));
+        printf(u"  %s  \r\n", LoadOptions[i].Description);
+    }
+}
+
+EFI_STATUS EFI_API efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
+    efi_init(ImageHandle, SystemTable);
+
+    UINTN LoadOptionCount = 0;
+    EFI_EXPANDED_LOAD_OPTION *LoadOptions = NULL;
+    LoadBootOptions(&LoadOptionCount, &LoadOptions);
+
+    EFI_EVENT Events[2];
+    BootServices->CreateEvent(
+            EFI_EVENT_TIMER,
+            TPL_APPLICATION,
+            NULL, NULL,
+            Events
+    );
+    BootServices->SetTimer(Events[0], TimerPeriodic, 10000000);
+    Events[1] = ConsoleIn->WaitForKey;
+
+    ConsoleOut->SetAttribute(ConsoleOut,
+        EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK));
+    ConsoleOut->ClearScreen(ConsoleOut);
+    DisplayBootOptions(LoadOptionCount, LoadOptions, 1);
+    printf(u"\r\n");
+
+    UINTN Selection = 1;
+    int Countdown = 6;
+    while (--Countdown >= 0) {
+        printf(u"Automatically Booting in %u Seconds   \r", Countdown);
+        UINTN index = 0;
+        BootServices->WaitForEvent(2, Events, &index);
+        if (index == 1) {
+            break;
+        }
+    }
+
+    if (Countdown >= 0) {
+        for (;;) {
+            ConsoleOut->SetAttribute(ConsoleOut,
+                EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK));
+            ConsoleOut->ClearScreen(ConsoleOut);
+
+            DisplayBootOptions(LoadOptionCount, LoadOptions, Selection);
+
+            EFI_INPUT_KEY key = WaitForKey();
+            if (key.ScanCode == SCANCODE_UP_ARROW) {
+                if (Selection > 0)
+                    Selection--;
+            } else if (key.ScanCode == SCANCODE_DOWN_ARROW) {
+                if (Selection < LoadOptionCount - 1)
+                    Selection++;
+            } else if (key.UnicodeChar == u'\r') {
+                break;
+            }
+        }
+    }
+
+    ConsoleOut->SetAttribute(ConsoleOut,
+        EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK));
+    ConsoleOut->ClearScreen(ConsoleOut);
+
+    EFI_HANDLE NextImageHandle = NULL;
+    SystemTable->BootServices->LoadImage(
+            TRUE, ImageHandle,
+            LoadOptions[Selection].FilePathList,
+            NULL, 0,
+            &NextImageHandle);
+
+    /*EFI_LOADED_IMAGE_PROTOCOL *NextLoadedImageProtocol = NULL;
+    BootServices->OpenProtocol(
+            NextImageHandle,
+            &EFI_LOADED_IMAGE_PROTOCOL_GUID,
+            (VOID **)&NextLoadedImageProtocol,
+            ImageHandle,
+            NULL,
+            EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+    printf(u"%u %u\r\n", NextLoadedImageProtocol->LoadOptions, NextLoadedImageProtocol->LoadOptionsSize);
+    NextLoadedImageProtocol->LoadOptions = LoadOptions[Selection].OptionalData;
+    NextLoadedImageProtocol->LoadOptionsSize = LoadOptions[Selection].OptionalDataLength;
+    WaitForKey();*/
+
+    SystemTable->BootServices->StartImage(NextImageHandle, NULL, NULL);
+    SystemTable->BootServices->UnloadImage(NextImageHandle);
+
     return EFI_SUCCESS;
 }

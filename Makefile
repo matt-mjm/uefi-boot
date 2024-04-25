@@ -2,9 +2,10 @@
 .PHONY: all clean
 
 SOURCE_DIR = source
-SPEC_DIR = ../uefi-spec/include
+SPEC_DIR = ../uefi-spec
 
 SOURCES = ${SOURCE_DIR}/main.c
+INCLUDE = ${SPEC_DIR}/include
 TARGET = boot.efi
 
 CC = clang \
@@ -25,7 +26,7 @@ LDFLAGS = \
 all: ${TARGET}
 
 ${TARGET}: ${SOURCES}
-	${CC} ${CFLAGS} ${LDFLAGS} -I ${SPEC_DIR} -o $@ $<
+	${CC} ${CFLAGS} ${LDFLAGS} -I ${INCLUDE} -o $@ $<
 
 clean:
 	rm ${TARGET}

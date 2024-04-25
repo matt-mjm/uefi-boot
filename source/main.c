@@ -28,6 +28,18 @@ void Init(EFI_HANDLE _ImageHandle, EFI_SYSTEM_TABLE *_SystemTable) {
             EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
 }
 
+void Cleanup(void) {
+    SystemTable->BootServices->CloseProtocol(
+            LoadedImageProtocol->DeviceHandle, &EFI_DEVICE_PATH_PROTOCOL_GUID, ImageHandle, NULL);
+    SystemTable->BootServices->CloseProtocol(
+            ImageHandle, &EFI_LOADED_IMAGE_PROTOCOL_GUID, ImageHandle, NULL);
+}
+
+void Copy(void *dst, void *src, size_t length) {
+    for (size_t i = 0; i < length; i++)
+        ((uint8_t *)dst)[i] = ((uint8_t *)src)[i];
+}
+
 void Print(char16_t *fmt, ...) {
     char16_t buffer[64];
 
@@ -105,23 +117,18 @@ EFI_INPUT_KEY WaitForKey(void) {
     return key;
 }
 
-EFI_STATUS LoadGlobalVariable(char16_t *VariableName, UINTN *DataSize, void **Data) {
-    if (VariableName == NULL || DataSize == NULL || Data == NULL)
-        return EFI_INVALID_PARAMETER;
-    *DataSize = 0;
-    *Data = NULL;
+UINTN DevicePathLength(EFI_DEVICE_PATH_PROTOCOL *DevicePath) {
+    UINTN length = 0;
+    for (EFI_DEVICE_PATH_PROTOCOL *Node = DevicePath;;) {
+        length += Node->Length;
 
-    EFI_STATUS status = EFI_SUCCESS;
-    SystemTable->RuntimeServices->GetVariable(VariableName, &EFI_GLOBAL_VARIABLE_GUID, NULL, DataSize, NULL);
-    status = SystemTable->BootServices->AllocatePool(EfiLoaderData, *DataSize, Data);
-    if (status != EFI_SUCCESS)
-        return status;
+        if (Node->Type == EFI_DEVICE_PATH_END) {
+            break;
+        }
 
-    status = SystemTable->RuntimeServices->GetVariable(VariableName, &EFI_GLOBAL_VARIABLE_GUID, NULL, DataSize, *Data);
-    if (status != EFI_SUCCESS)
-        return status;
-
-    return EFI_SUCCESS;
+        Node = (EFI_DEVICE_PATH_PROTOCOL *)((uint8_t *)Node + Node->Length);
+    }
+    return length;
 }
 
 EFI_STATUS ExpandLoadOption(EFI_EXPANDED_LOAD_OPTION *LoadOption) {
@@ -145,33 +152,64 @@ EFI_STATUS ExpandLoadOption(EFI_EXPANDED_LOAD_OPTION *LoadOption) {
     return EFI_SUCCESS;
 }
 
-UINTN DevicePathLength(EFI_DEVICE_PATH_PROTOCOL *DevicePath) {
-    UINTN length = 0;
-    for (EFI_DEVICE_PATH_PROTOCOL *Node = DevicePath;;) {
-        length += Node->Length;
+EFI_STATUS LoadGlobalVariable(char16_t *VariableName, UINTN *DataSize, void **Data) {
+    if (VariableName == NULL || DataSize == NULL || Data == NULL)
+        return EFI_INVALID_PARAMETER;
+    *DataSize = 0;
+    *Data = NULL;
 
-        if (Node->Type == EFI_DEVICE_PATH_END) {
-            break;
-        }
+    EFI_STATUS status = EFI_SUCCESS;
+    SystemTable->RuntimeServices->GetVariable(VariableName, &EFI_GLOBAL_VARIABLE_GUID, NULL, DataSize, NULL);
+    status = SystemTable->BootServices->AllocatePool(EfiLoaderData, *DataSize, Data);
+    if (status != EFI_SUCCESS)
+        return status;
 
-        Node = (EFI_DEVICE_PATH_PROTOCOL *)((uint8_t *)Node + Node->Length);
+    status = SystemTable->RuntimeServices->GetVariable(VariableName, &EFI_GLOBAL_VARIABLE_GUID, NULL, DataSize, *Data);
+    if (status != EFI_SUCCESS)
+        return status;
+
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS LoadBootNumber(uint16_t BootNumber, EFI_EXPANDED_LOAD_OPTION *LoadOption) {
+    static char16_t VariableName[9] = u"Boot";
+    VariableName[4] = HEX[(BootNumber / 4096) % 16];
+    VariableName[5] = HEX[(BootNumber / 256) % 16];
+    VariableName[6] = HEX[(BootNumber / 16) % 16];
+    VariableName[7] = HEX[BootNumber % 16];
+    VariableName[8] = u'\0';
+
+    EFI_STATUS status = LoadGlobalVariable(VariableName, &LoadOption->LoadOptionLength, (void**)&LoadOption->LoadOption);
+    if (status != EFI_SUCCESS)
+        return status;
+
+    ExpandLoadOption(LoadOption);
+
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS LoadBootOptions(UINTN *LoadOptionCount, EFI_EXPANDED_LOAD_OPTION **LoadOptions) {
+    UINTN BootOrderSize = 0;
+    uint16_t *BootOrder = NULL;
+    LoadGlobalVariable(u"BootOrder", &BootOrderSize, (void **)&BootOrder);
+    *LoadOptionCount = BootOrderSize / sizeof(uint16_t);
+
+    SystemTable->BootServices->AllocatePool(EfiLoaderData, *LoadOptionCount * sizeof(EFI_EXPANDED_LOAD_OPTION), (void **)LoadOptions);
+    for (UINTN i = 0; i < *LoadOptionCount; i++) {
+        LoadBootNumber(BootOrder[i], &(*LoadOptions)[i]);
     }
-    return length;
+
+    SystemTable->BootServices->FreePool(BootOrder);
+
+    return EFI_SUCCESS;
 }
 
-BOOLEAN SecureBootEnabled(void) {
-    uint8_t isSecureBoot = 0;
-    UINTN isSecureBootSize = sizeof(isSecureBoot);
-    EFI_STATUS status = SystemTable->RuntimeServices->GetVariable(u"SecureBoot", &EFI_GLOBAL_VARIABLE_GUID, NULL, &isSecureBootSize, &isSecureBoot);
+EFI_STATUS FreeBootOptions(UINTN LoadOptionCount, EFI_EXPANDED_LOAD_OPTION *LoadOptions) {
+    for (UINTN i = 0; i < LoadOptionCount; i++)
+        SystemTable->BootServices->FreePool(LoadOptions[i].LoadOption);
+    SystemTable->BootServices->FreePool(LoadOptions);
 
-    Print(u"SecureBoot: %u %u %x\r\n", isSecureBoot, isSecureBootSize, status);
-
-    return status == EFI_SUCCESS && isSecureBoot == 1;
-}
-
-void Copy(void *dst, void *src, size_t length) {
-    for (size_t i = 0; i < length; i++)
-        ((uint8_t *)dst)[i] = ((uint8_t *)src)[i];
+    return EFI_SUCCESS;
 }
 
 EFI_DEVICE_PATH_PROTOCOL *SpliceDevicePaths(EFI_DEVICE_PATH_PROTOCOL *Base, EFI_DEVICE_PATH_PROTOCOL *Path) {
@@ -186,8 +224,6 @@ EFI_DEVICE_PATH_PROTOCOL *SpliceDevicePaths(EFI_DEVICE_PATH_PROTOCOL *Base, EFI_
 
     EFI_DEVICE_PATH_PROTOCOL *Temp = Result;
     for (EFI_DEVICE_PATH_PROTOCOL *Node = Base;;) {
-        Print(u"Base %u %u %u\r\n", Node->Type, Node->SubType, Node->Length);
-
         if (Node->Type == Path->Type && Node->SubType == Path->SubType && Node->Length == Path->Length) {
             break;
         }
@@ -203,8 +239,6 @@ EFI_DEVICE_PATH_PROTOCOL *SpliceDevicePaths(EFI_DEVICE_PATH_PROTOCOL *Base, EFI_
     }
 
     for (EFI_DEVICE_PATH_PROTOCOL *Node = Path;;) {
-        Print(u"Path %u %u %u\r\n", Node->Type, Node->SubType, Node->Length);
-
         Copy(Temp, Node, Node->Length);
 
         if (Node->Type == EFI_DEVICE_PATH_END) {
@@ -218,67 +252,106 @@ EFI_DEVICE_PATH_PROTOCOL *SpliceDevicePaths(EFI_DEVICE_PATH_PROTOCOL *Base, EFI_
     return Result;
 }
 
+void DisplayBootOptions(UINTN LoadOptionCount, EFI_EXPANDED_LOAD_OPTION *LoadOptions, UINTN Selection) {
+    for (UINTN i = 0; i < LoadOptionCount; i++) {
+        SystemTable->ConsoleOut->SetAttribute(SystemTable->ConsoleOut, EFI_TEXT_ATTRIBUTE(
+            Selection == i ? EFI_BLACK : EFI_LIGHTGRAY,
+            Selection == i ? EFI_LIGHTGRAY : EFI_BLACK));
+        Print(u"  %s  \r\n", LoadOptions[i].Description);
+    }
+}
+
 EFI_STATUS EFI_API efi_main(EFI_HANDLE _ImageHandle, EFI_SYSTEM_TABLE *_SystemTable) {
     Init(_ImageHandle, _SystemTable);
+
+    UINTN LoadOptionCount = 0;
+    EFI_EXPANDED_LOAD_OPTION *LoadOptions = NULL;
+    LoadBootOptions(&LoadOptionCount, &LoadOptions);
+
+    EFI_EVENT Events[2];
+    SystemTable->BootServices->CreateEvent(
+            EFI_EVENT_TIMER,
+            TPL_APPLICATION,
+            NULL, NULL,
+            Events
+    );
+    SystemTable->BootServices->SetTimer(Events[0], TimerPeriodic, 10000000);
+    Events[1] = SystemTable->ConsoleIn->WaitForKey;
+
+    SystemTable->ConsoleOut->SetAttribute(SystemTable->ConsoleOut,
+        EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK));
+    SystemTable->ConsoleOut->ClearScreen(SystemTable->ConsoleOut);
+    DisplayBootOptions(LoadOptionCount, LoadOptions, 1);
+    Print(u"\r\n");
+
+    UINTN Selection = 1;
+    int Countdown = 6;
+    while (--Countdown >= 0) {
+        Print(u"Automatically Booting in %u Seconds   \r", Countdown);
+        UINTN index = 0;
+        SystemTable->BootServices->WaitForEvent(2, Events, &index);
+        if (index == 1) {
+            break;
+        }
+    }
+
+    SystemTable->BootServices->CloseEvent(Events[0]);
+
+    if (Countdown >= 0) {
+        for (;;) {
+            SystemTable->ConsoleOut->SetAttribute(SystemTable->ConsoleOut,
+                EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK));
+            SystemTable->ConsoleOut->ClearScreen(SystemTable->ConsoleOut);
+
+            DisplayBootOptions(LoadOptionCount, LoadOptions, Selection);
+
+            EFI_INPUT_KEY key = WaitForKey();
+            if (key.ScanCode == SCANCODE_UP_ARROW) {
+                if (Selection > 0)
+                    Selection--;
+            } else if (key.ScanCode == SCANCODE_DOWN_ARROW) {
+                if (Selection < LoadOptionCount - 1)
+                    Selection++;
+            } else if (key.UnicodeChar == u'\r') {
+                break;
+            }
+        }
+    }
 
     SystemTable->ConsoleOut->SetAttribute(SystemTable->ConsoleOut,
         EFI_TEXT_ATTRIBUTE(EFI_LIGHTGRAY, EFI_BLACK));
     SystemTable->ConsoleOut->ClearScreen(SystemTable->ConsoleOut);
 
-    EFI_EXPANDED_LOAD_OPTION loadOption;
-    LoadGlobalVariable(u"Boot0000", &loadOption.LoadOptionLength, (void **)&loadOption.LoadOption);
-    ExpandLoadOption(&loadOption);
-
-    Print(u"Load Option: %u %u %u %u %s\r\n", loadOption.LoadOptionLength, loadOption.DescriptionLength, loadOption.FilePathLength, loadOption.OptionalDataLength, loadOption.Description);
-
-    for (EFI_DEVICE_PATH_PROTOCOL *n1 = DevicePathProtocol, *n2 = loadOption.FilePath;;) {
-        Print(u"%u %u %u <=> %u %u %u\r\n",
-                n1->Type, n1->SubType, n1->Length,
-                n2->Type, n2->SubType, n2->Length);
-
-        BOOLEAN c1 = n1->Type == EFI_DEVICE_PATH_MEDIA && n1->SubType == EFI_DEVICE_PATH_MEDIA_FILE_PATH;
-        BOOLEAN c2 = n2->Type == EFI_DEVICE_PATH_MEDIA && n2->SubType == EFI_DEVICE_PATH_MEDIA_FILE_PATH;
-
-        if (c1 || c2) {
-            Print(u"[%s] <=> [%s]\r\n", c1 ? (char16_t *)n1->Data : u"", c2 ? (char16_t *)n2->Data : u"");
-        }
-
-        if (n1->Type == EFI_DEVICE_PATH_END && n2->Type == EFI_DEVICE_PATH_END) {
-            break;
-        }
-
-        if (n1->Type != EFI_DEVICE_PATH_END) {
-            n1 = (EFI_DEVICE_PATH_PROTOCOL *)((uint8_t *)n1 + n1->Length);
-        }
-        if (n2->Type != EFI_DEVICE_PATH_END) {
-            n2 = (EFI_DEVICE_PATH_PROTOCOL *)((uint8_t *)n2 + n2->Length);
-        }
-    }
-
-    EFI_DEVICE_PATH_PROTOCOL *Path = SpliceDevicePaths(DevicePathProtocol, loadOption.FilePath);
-    for (EFI_DEVICE_PATH_PROTOCOL *Node = Path;;) {
-        Print(u"Result %u %u %u %s\r\n", Node->Type, Node->SubType, Node->Length,
-                Node->Type == EFI_DEVICE_PATH_MEDIA && Node->SubType == EFI_DEVICE_PATH_MEDIA_FILE_PATH ? (char16_t *)Node->Data : u"");
-
-        if (Node->Type == EFI_DEVICE_PATH_END) {
-            break;
-        }
-
-        Node = (EFI_DEVICE_PATH_PROTOCOL *)((uint8_t *)Node + Node->Length);
-    }
-
+    EFI_DEVICE_PATH_PROTOCOL *FilePath = SpliceDevicePaths(DevicePathProtocol, LoadOptions[Selection].FilePath);
     EFI_HANDLE NextImageHandle = NULL;
-    EFI_STATUS s0 = SystemTable->BootServices->LoadImage(
+    SystemTable->BootServices->LoadImage(
             TRUE, ImageHandle,
-            Path,
+            FilePath,
             NULL, 0,
             &NextImageHandle);
-    Print(u"Status: %x %x\r\n", s0, NextImageHandle);
 
-    Print(u"Press any key to continue...\r\n");
-    WaitForKey();
+    void *OptionalData = NULL;
+    SystemTable->BootServices->AllocatePool(EfiLoaderData, LoadOptions[Selection].OptionalDataLength, (void **)&OptionalData);
+    Copy(OptionalData, LoadOptions[Selection].OptionalData, LoadOptions[Selection].OptionalDataLength);
+
+    EFI_LOADED_IMAGE_PROTOCOL *NextLoadedImageProtocol = NULL;
+    SystemTable->BootServices->OpenProtocol(
+            NextImageHandle,
+            &EFI_LOADED_IMAGE_PROTOCOL_GUID,
+            (VOID **)&NextLoadedImageProtocol,
+            ImageHandle,
+            NULL,
+            EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+    NextLoadedImageProtocol->LoadOptions = OptionalData;
+    NextLoadedImageProtocol->LoadOptionsSize = LoadOptions[Selection].OptionalDataLength;
+
+    FreeBootOptions(LoadOptionCount, LoadOptions);
+    Cleanup();
 
     SystemTable->BootServices->StartImage(NextImageHandle, NULL, NULL);
+    SystemTable->BootServices->CloseProtocol(NextImageHandle, &EFI_LOADED_IMAGE_PROTOCOL_GUID, ImageHandle, NULL);
+    SystemTable->BootServices->FreePool(OptionalData);
+    SystemTable->BootServices->UnloadImage(NextImageHandle);
 
     return EFI_SUCCESS;
 }

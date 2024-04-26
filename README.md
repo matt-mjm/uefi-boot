@@ -6,7 +6,11 @@ The program loads the current boot options then allow the user to select one of 
 If no keys are pressed for at least five seconds after boot then the second boot option is loaded automatically.
 
 ### Build Instructions
+The [uefi-spec](https://github.com/matt-mjm/uefi-spec) repository needs to exist in the same directory as this repository for the build to work.
 ```
+git clone https://github.com/matt-mjm/uefi-boot.git
+git clone https://github.com/matt-mjm/uefi-spec.git
+cd uefi-boot
 make
 ```
 
